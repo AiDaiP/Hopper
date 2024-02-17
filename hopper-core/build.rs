@@ -11,8 +11,14 @@ fn main() {
             .file("src/feedback/globl/llvm-globl.c")
             .compile("llvm-globl");
     }
+    #[cfg(target_family = "unix")]
     cc::Build::new()
     .file("src/feedback/globl/variadic.c")
+    .define("_LARGEFILE64_SOURCE", "1")
+    .compile("variadic");
+    #[cfg(target_family = "windows")]
+    cc::Build::new()
+    .file("src/feedback/globl/variadic-win.c")
     .define("_LARGEFILE64_SOURCE", "1")
     .compile("variadic");
 }

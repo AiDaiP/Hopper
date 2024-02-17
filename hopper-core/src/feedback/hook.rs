@@ -1,7 +1,12 @@
 //! Hooks for llvm mode
 //! TODO: indirect invoking
 
-use libc::{c_char, c_int, c_void, mode_t, off_t, size_t, ssize_t, FILE};
+use libc::{c_char, c_int, c_void, off_t, size_t, ssize_t, FILE};
+
+#[cfg(target_os = "linux")]
+use libc::mode_t;
+#[cfg(target_os = "windows")]
+type mode_t = i32;
 
 use super::get_instr_list_mut;
 use crate::{CmpType, MemType};
@@ -378,7 +383,7 @@ pub unsafe extern "C" fn __hopper_read(fd: c_int, buf: *mut c_void, count: size_
     if fd == 0 || fd == 1 || fd == 2 || is_reserve_fd(fd) {
         return -1;
     }
-    libc::read(fd, buf, count)
+    libc::read(fd, buf, count.try_into().unwrap()).try_into().unwrap()
 }
 
 pub unsafe extern "C" fn __hopper_write(fd: c_int, buf: *const c_void, count: size_t) -> ssize_t {
@@ -390,5 +395,5 @@ pub unsafe extern "C" fn __hopper_write(fd: c_int, buf: *const c_void, count: si
     if fd == 0 || is_reserve_fd(fd) {
         return -1;
     }
-    libc::write(fd, buf, count)
+    libc::write(fd, buf, count.try_into().unwrap()).try_into().unwrap()
 }

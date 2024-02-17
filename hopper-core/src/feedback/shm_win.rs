@@ -21,7 +21,7 @@ impl<T> SharedMemory<T> {
     }
 
     /// Create a shared memory at specific location of process memory
-    pub fn new_at(ptr_base: *mut std::os::raw::c_void, lp_name: &str) -> eyre::Result<Self> {
+    pub fn new_at(ptr_base: *mut winapi::ctypes::c_void, lp_name: &str) -> eyre::Result<Self> {
         let handle =
             crate::execute::hopper_create_file_mapping(0, 0x100000, lp_name.as_ptr() as u32)?;
         Self::from_id_at(handle, ptr_base)
@@ -29,8 +29,8 @@ impl<T> SharedMemory<T> {
 
     /// Load shared memory by its SHMID at specific location of process memory
     fn from_id_at(
-        handle: *mut std::os::raw::c_void,
-        lp_addr: *mut std::os::raw::c_void,
+        handle: *mut winapi::ctypes::c_void,
+        lp_addr: *mut winapi::ctypes::c_void,
     ) -> eyre::Result<Self> {
         let size = std::mem::size_of::<T>() as usize;
         let ptr = match crate::execute::hopper_map_view_of_file_ex(handle, 0, 0, 0, lp_addr) {
@@ -60,7 +60,7 @@ pub fn setup_shm<T: SHMable>() -> eyre::Result<SharedMemory<T>> {
     log::info!("setup {} shm for e9 runtime...", T::name());
     // let area_base = format!("{}_AREA_BASE\x00", crate::config::TASK_NAME);
     let lp_name = format!("{}_{}\x00", T::shmid_env_var(),crate::config::TASK_NAME);
-    let shm = SharedMemory::<T>::new_at(T::ptr_base() as *mut std::os::raw::c_void, &lp_name)?;
+    let shm = SharedMemory::<T>::new_at(T::ptr_base() as *mut winapi::ctypes::c_void, &lp_name)?;
     log::info!("setup {} shared memory success ! shm: {:?}, lp_name: {}", T::name(), shm, lp_name);
     Ok(shm)
 }

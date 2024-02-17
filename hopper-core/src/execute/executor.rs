@@ -188,7 +188,7 @@ impl Executor {
                     pi.dwProcessId,
                     pi.dwThreadId
                 );
-                match crate::execute::hopper_waitpid(&mut pi, config::WAIT_PID_TIMEOUT) {
+                match crate::execute::hopper_waitpid(&mut pi,  crate::WAIT_PID_TIMEOUT) {
                     Ok(status) => match status {
                         crate::execute::WinWaitStatus::Exited(code) => {
                             if code == config::EXEC_ERROR_EXIT_CODE as u32 {

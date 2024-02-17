@@ -62,7 +62,7 @@ fn instrument(library: &Path, output: &Path, config: &Config, lib_info: &BinaryI
             #[cfg(target_os = "windows")]
             {
                 eyre::ensure!(
-                    check::check_file_contains(library, "E9PATCH"),
+                    check::check_file_contains(library.to_str().unwrap(), "E9PATCH"),
                     "The library should be instrumented by E9 in linux"
                 );
                 fs::copy(library, &output_lib).context("fail to copy library")?;

@@ -69,6 +69,7 @@ impl StatusType {
     pub fn is_loop_end(&self) -> bool {
         matches!(self, Self::LoopEnd)
     }
+    #[cfg(target_os = "linux")]
     pub fn is_abort(&self) -> bool {
         matches!(
             self,
@@ -77,6 +78,11 @@ impl StatusType {
             }
         )
     }
+    #[cfg(target_os = "windows")]
+    pub fn is_abort(&self) -> bool {
+        false
+    }
+    #[cfg(target_os = "linux")]
     pub fn is_sigfpe(&self) -> bool {
         matches!(
             self,
@@ -85,6 +91,11 @@ impl StatusType {
             }
         )
     }
+    #[cfg(target_os = "windows")]
+    pub fn is_sigfpe(&self) -> bool {
+        false
+    }
+    #[cfg(target_os = "linux")]
     pub fn is_overflow(&self) -> bool {
         matches!(
             self,
@@ -94,6 +105,10 @@ impl StatusType {
                 signal: Signal::SIGBUS
             }
         )
+    }
+    #[cfg(target_os = "windows")]
+    pub fn is_overflow(&self) -> bool {
+        false
     }
 }
 

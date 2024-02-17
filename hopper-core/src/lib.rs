@@ -38,6 +38,7 @@ fn init_harness() -> eyre::Result<()> {
 fn reserve_fds() {
     for fd in config::RESERVED_FD_MIN..=config::RESERVED_FD_MAX {
         // check fd is used or not
+        #[cfg(target_os = "linux")]
         if unsafe { libc::fcntl(fd, libc::F_GETFD) != -1 }
             || std::io::Error::last_os_error().raw_os_error().unwrap_or(0) != libc::EBADF
         {

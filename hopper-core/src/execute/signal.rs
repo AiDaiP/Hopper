@@ -6,32 +6,36 @@ use hopper_derive::Serde;
 use crate::{CanaryInfo, FuzzProgram};
 
 pub fn install_signal_handler() {
-    // static mut PREV_HANDLER: extern "C" fn(libc::c_int, *mut libc::siginfo_t, *mut libc::c_void) = std::ptr::null_mut();
-    if cfg!(test) || cfg!(not(any(feature = "e9_mode", feature = "llvm_mode"))) {
-        return;
-    }
-    use nix::sys::signal;
-    unsafe {
-        // https://github.com/rust-lang/rust/issues/69533
-        // https://github.com/rust-lang/rust/blob/master/library/std/src/sys/unix/stack_overflow.rs
-        // the handler will overwrite rust's runtime to detect stack overflow.
-        let sig_action = signal::SigAction::new(
-            signal::SigHandler::SigAction(sigv_handler),
-            signal::SaFlags::SA_SIGINFO
-                | signal::SaFlags::SA_RESETHAND
-                | signal::SaFlags::SA_ONSTACK,
-            signal::SigSet::empty(),
-        );
-        for signal in [signal::SIGSEGV, signal::SIGBUS] {
-            let ret = signal::sigaction(signal, &sig_action);
-            if let Err(err) = ret {
-                crate::log!(error, "fail to install signal hook: {:?}", err);
+    #[cfg(target_os = "linux")]
+    {
+        // static mut PREV_HANDLER: extern "C" fn(libc::c_int, *mut libc::siginfo_t, *mut libc::c_void) = std::ptr::null_mut();
+        if cfg!(test) || cfg!(not(any(feature = "e9_mode", feature = "llvm_mode"))) {
+            return;
+        }
+        use nix::sys::signal;
+        unsafe {
+            // https://github.com/rust-lang/rust/issues/69533
+            // https://github.com/rust-lang/rust/blob/master/library/std/src/sys/unix/stack_overflow.rs
+            // the handler will overwrite rust's runtime to detect stack overflow.
+            let sig_action = signal::SigAction::new(
+                signal::SigHandler::SigAction(sigv_handler),
+                signal::SaFlags::SA_SIGINFO
+                    | signal::SaFlags::SA_RESETHAND
+                    | signal::SaFlags::SA_ONSTACK,
+                signal::SigSet::empty(),
+            );
+            for signal in [signal::SIGSEGV, signal::SIGBUS] {
+                let ret = signal::sigaction(signal, &sig_action);
+                if let Err(err) = ret {
+                    crate::log!(error, "fail to install signal hook: {:?}", err);
+                }
             }
         }
+        crate::log!(trace, "install signal handler!");
     }
-    crate::log!(trace, "install signal handler!");
 }
 
+#[cfg(target_os = "linux")]
 extern "C" fn sigv_handler(
     _sig: libc::c_int,
     si: *mut libc::siginfo_t,

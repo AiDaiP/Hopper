@@ -117,14 +117,28 @@ impl ForkSrv {
                                 let status = if let Err(e) = ret {
                                     if let Some(he) = e.downcast_ref::<crate::HopperError>() {
                                         match he {
+                                            #[cfg(target_os = "linux")]
                                             HopperError::DoubleFree { .. } => StatusType::Crash {
                                                 signal: super::Signal::SIGABRT,
                                             },
+                                            #[cfg(target_os = "windows")]
+                                            HopperError::DoubleFree { .. } => StatusType::Crash {
+                                                signal: 1,
+                                            },
+                                            #[cfg(target_os = "linux")]
                                             HopperError::AssertError{ msg: _, silent } => {
                                                 if *silent {
                                                     StatusType::default()
                                                 } else {
                                                     StatusType::Crash { signal: super::Signal::SIGABRT }
+                                                }
+                                            },
+                                            #[cfg(target_os = "windows")]
+                                            HopperError::AssertError{ msg: _, silent } => {
+                                                if *silent {
+                                                    StatusType::default()
+                                                } else {
+                                                    StatusType::Crash { signal: 1 }
                                                 }
                                             },
                                             HopperError::UseAfterFree { .. } => {
@@ -241,7 +255,7 @@ impl ForkSrv {
         Ok(())
     }
 
-    fn receive_cmd(&mut self) -> eyre::Result<ForkCmd> {
+    pub fn receive_cmd(&mut self) -> eyre::Result<ForkCmd> {
         match io_utils::receive_line(&mut self.reader) {
             Ok(cmd) => Ok(cmd),
             Err(err) => {

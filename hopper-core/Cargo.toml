@@ -36,7 +36,7 @@ plthook = "0.2"
 #[cfg(target_os = "windows")]
 uds_windows = "1.0.1"
 #[cfg(target_os = "windows")]
-ntapi = "0.3.7"
+ntapi = "0.4"
 #[cfg(target_os = "windows")]
 winapi = { version = "0.3", features = [
      "profileapi",

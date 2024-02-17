@@ -1,8 +1,8 @@
-use crate::{config, error, execute::*, feedback::*, runtime::*, TimeUsage};
+use crate::{config, error, execute::*, feedback::*, runtime::*, HopperError, TimeUsage};
 use eyre::Context;
 use forksrv::ForkSrv;
 use ntapi;
-use std::io::prelude::*;
+use std::{io::prelude::*, time::Duration};
 use winapi;
 
 pub static HOPPER_USE_THREAD: &str = "HOPPER_USE_THREAD";
@@ -21,7 +21,7 @@ extern "system" {
 }
 
 pub fn check_hopper_use_thread_win() -> bool {
-    if let Ok(enable) = std::env::var(crate::config::HOPPER_USE_THREAD) {
+    if let Ok(enable) = std::env::var(crate::HOPPER_USE_THREAD) {
         if enable == "1" {
             return true;
         }
@@ -32,7 +32,7 @@ pub fn check_hopper_use_thread_win() -> bool {
 }
 
 pub fn get_hopper_use_thread_num() -> i32 {
-    if let Ok(num) = std::env::var(crate::config::HOPPER_USE_THREAD_NUM) {
+    if let Ok(num) = std::env::var(crate::HOPPER_USE_THREAD_NUM) {
         num.parse::<i32>().unwrap()
     } else {
         100
@@ -41,11 +41,12 @@ pub fn get_hopper_use_thread_num() -> i32 {
 
 impl ForkSrv {
     pub fn thread_loop_win(&mut self) -> eyre::Result<()> {
-        let mut executor = super::Executor::new();
+        let mut executor = super::Executor::default();
         executor.set_timeout(self.timeout_limit);
+        let loop_num = config::get_fast_execute_loop();
         let mut exec_usage = TimeUsage::default();
         let start_at = std::time::Instant::now();
-        disable_coverage_feedback();
+        crate::globl::disable_coverage_feedback();
         let raw_data_base = format!("{}_RAW_DATA_BASE\x00", crate::config::TASK_NAME);
         let id =
             crate::execute::hopper_create_file_mapping(0, 0x100000, raw_data_base.as_ptr() as u32)
@@ -55,7 +56,7 @@ impl ForkSrv {
             0,
             0,
             0,
-            crate::config::RAW_DATA_PTR as *mut std::os::raw::c_void,
+            crate::config::RAW_DATA_PTR as *mut winapi::ctypes::c_void,
         ) {
             Ok(ptr) => {
                 crate::log!(
@@ -98,7 +99,7 @@ impl ForkSrv {
                 let wait_res = unsafe {
                     winapi::um::synchapi::WaitForSingleObject(
                         event_child_ready,
-                        config::WAIT_PID_TIMEOUT - 1000,
+                        crate::WAIT_PID_TIMEOUT - 1000,
                     )
                 };
                 unsafe {
@@ -118,13 +119,13 @@ impl ForkSrv {
                 let mut raw_buf = crate::config::RAW_DATA_PTR as *mut crate::execute::RawData;
                 let mut child_procrss_thread_cnt = 0;
                 loop {
-                    if child_procrss_thread_cnt > crate::config::get_hopper_use_thread_num() {
+                    if child_procrss_thread_cnt > crate::get_hopper_use_thread_num() {
                         unsafe {
                             (*raw_buf).cmd = 0;
                             winapi::um::synchapi::SetEvent(event_parent_ready);
                             winapi::um::synchapi::WaitForSingleObject(
                                 event_child_finish,
-                                config::WAIT_PID_TIMEOUT + 2000,
+                                crate::WAIT_PID_TIMEOUT + 2000,
                             );
                             winapi::um::synchapi::ResetEvent(event_child_finish);
                         }
@@ -157,7 +158,7 @@ impl ForkSrv {
                             unsafe {
                                 let wait_res = winapi::um::synchapi::WaitForSingleObject(
                                     event_child_finish,
-                                    config::WAIT_PID_TIMEOUT + 2000,
+                                    crate::WAIT_PID_TIMEOUT + 2000,
                                 );
                                 winapi::um::synchapi::ResetEvent(event_child_finish);
                                 if wait_res != 0 {
@@ -245,7 +246,7 @@ impl ForkSrv {
                             }
                             break 'outer;
                         }
-                        ForkCmd::Sanitize(f) => {
+                        ForkCmd::Sanitize => {
                             crate::log!(
                                 debug,
                                 "receive {}-th program for sanitize..",
@@ -257,14 +258,126 @@ impl ForkSrv {
                                 let _counter = exec_usage.count();
                                 executor.execute(|| {
                                     let mut program = self.read_program(&buf)?;
-                                    program.sanitize(f);
+                                    program.sanitize()
                                 })
                             };
-                            let last_stmt = self.feedback.last_stmt_index();
-                            // SanitizeChecker::check_illegal_free(f, last_stmt)?;
                             executor.set_timeout(self.timeout_limit);
                             crate::log!(debug, "sanitize status: {:?}", status);
                             writeln!(self.writer, "{}", status.serialize()?)?;
+                            self.writer.flush()?;
+                        }
+                        ForkCmd::Loop => {
+                            crate::log!(debug, "receive {}-loop program (fast)..", executor.count());
+                            executor.set_timeout(Duration::from_secs(3600)); // long enough
+                            let mut buf = self.read_buf()?;
+                            let status = {
+                                let _counter = exec_usage.count();
+                                executor.execute(|| {
+                                    for i in 0..loop_num {
+                                        if i > 0 {
+                                            let cmd = self.receive_cmd()?;
+                                            crate::log!(debug, "receive : {cmd:?}");
+                                            if cmd != ForkCmd::Loop {
+                                                break;
+                                            }
+                                            buf = self.read_buf()?;
+                                        }
+                                        crate::log!(debug, "receive {i}-th program in loop (fast)..");
+                                        crate::log!(debug, "program: {}", buf);
+                                        self.feedback.clear();
+                                        self.feedback.instrs.loop_cnt = i as u32;
+                                        // std::mem::forget(program.stmts);
+                                        // std::sync::atomic::compiler_fence( std::sync::atomic::Ordering::SeqCst);
+                                        let mut program = self.read_program(&buf)?;
+                                        // std::sync::atomic::compiler_fence( std::sync::atomic::Ordering::SeqCst);
+                                        let (sender, receiver) = std::sync::mpsc::channel();
+                                        let _ = std::thread::Builder::new().spawn(move || {
+                                            if receiver.recv_timeout(Duration::from_secs(3600)).is_err() {
+                                                std::process::exit(config::TIMEOUT_CODE);
+                                            }
+                                        });
+        
+                                        let ret = program.eval();
+                                        let _ = sender.send(true);
+                                        let status = if let Err(e) = ret {
+                                            if let Some(he) = e.downcast_ref::<crate::HopperError>() {
+                                                match he {
+                                                    #[cfg(target_os = "linux")]
+                                                    HopperError::DoubleFree { .. } => StatusType::Crash {
+                                                        signal: super::Signal::SIGABRT,
+                                                    },
+                                                    #[cfg(target_os = "windows")]
+                                                    HopperError::DoubleFree { .. } => StatusType::Crash {
+                                                        signal: 1,
+                                                    },
+                                                    #[cfg(target_os = "linux")]
+                                                    HopperError::AssertError{ msg: _, silent } => {
+                                                        if *silent {
+                                                            StatusType::default()
+                                                        } else {
+                                                            StatusType::Crash { signal: super::Signal::SIGABRT }
+                                                        }
+                                                    },
+                                                    #[cfg(target_os = "windows")]
+                                                    HopperError::AssertError{ msg: _, silent } => {
+                                                        if *silent {
+                                                            StatusType::default()
+                                                        } else {
+                                                            StatusType::Crash { signal: 1 }
+                                                        }
+                                                    },
+                                                    HopperError::UseAfterFree { .. } => {
+                                                        StatusType::default()
+                                                    }
+                                                    _ => StatusType::Ignore,
+                                                }
+                                            } else {
+                                                StatusType::Ignore
+                                            }
+                                        } else {
+                                            StatusType::Normal
+                                        };
+                                        crate::log!(debug, "loop status(inner): {:?}", status);
+                                        if i + 1 >= loop_num {
+                                            writeln!(self.writer, "{}", StatusType::LoopEnd.serialize()?)?;
+                                            crate::log!(debug, "loop is going to finish!");
+                                        }
+                                        writeln!(self.writer, "{}", status.serialize()?)?;
+                                        self.writer.flush()?;
+                                        canary::clear_canary_protection();
+                                        self.feedback.instrs.loop_cnt = i as u32 + 1;
+                                        // break if we find some errors
+                                        if !status.is_normal() {
+                                            break;
+                                        }
+                                    }
+                                    crate::log!(debug, "loop has finished");
+                                    self.feedback.instrs.loop_cnt = loop_num as u32;
+                                    Ok(())
+                                })
+                            };
+        
+                            crate::log!(debug, "loop status(outer): {:?}", status);
+                            let executed_loop = { self.feedback.instrs.loop_cnt };
+                            crate::log!(info, "executed loop: {executed_loop}, status: {status:?}");
+                            writeln!(self.writer, "{}", status.serialize()?)?;
+                            self.writer.flush()?;
+                            executor.set_timeout(self.timeout_limit);
+                        }
+                        ForkCmd::Config(config) => {
+                            crate::log!(info, "receive config: {config}");
+                            if let Some(pos) = config.find('=') {
+                                let key = &config[..pos];
+                                let value = &config[pos + 1..];
+                                if key == OPAQUE_CONFIG_KEY {
+                                    let list: Vec<&str> = value.split(',').collect();
+                                    for item in list {
+                                        global_gadgets::get_mut_instance().add_opaque_type(item);
+                                    }
+                                }
+                            }
+                            // ping the client that we have received.
+                            writeln!(self.writer, "{}", StatusType::Ignore.serialize()?)?;
                             self.writer.flush()?;
                         }
                     }
@@ -319,7 +432,7 @@ impl ForkSrv {
                             unsafe {
                                 let wait_res = winapi::um::synchapi::WaitForSingleObject(
                                     event_thread_ready,
-                                    config::WAIT_PID_TIMEOUT,
+                                    crate::WAIT_PID_TIMEOUT,
                                 );
                                 winapi::um::synchapi::ResetEvent(event_thread_ready);
                                 if wait_res != 0 {
@@ -333,7 +446,7 @@ impl ForkSrv {
                             let wait_res = unsafe {
                                 winapi::um::synchapi::WaitForSingleObject(
                                     t_handle,
-                                    config::WAIT_PID_TIMEOUT,
+                                    crate::WAIT_PID_TIMEOUT,
                                 )
                             };
                             crate::execute::do_close_handle(t_handle);
@@ -1093,7 +1206,7 @@ pub fn bind_cur_thread_to_one_core(id: u32) -> bool {
 }
 
 pub fn bind_cpu_win() -> eyre::Result<(), crate::HopperError> {
-    if let Ok(enable) = std::env::var(crate::config::HOPPER_ENABLE_CPU_BINDING_VAR) {
+    if let Ok(enable) = std::env::var(crate::HOPPER_ENABLE_CPU_BINDING_VAR) {
         if enable != "1" {
             return Ok(());
         }
